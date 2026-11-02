@@ -249,7 +249,7 @@ export default function HomePage() {
           className="absolute inset-0 -z-20 bg-cover bg-center opacity-30"
           style={{
             backgroundImage:
-              "url('https://images.unsplash.com/photo-1544620347-c4fd4a3d5957?auto=format&fit=crop&w=1800&q=85')",
+            "url('/sadak-settu-hero.jpg')", 
           }}
         />
         <div className="absolute inset-0 -z-10 bg-gradient-to-r from-slate-950 via-slate-950/95 to-slate-900/80" />
@@ -391,7 +391,7 @@ export default function HomePage() {
             <div className="flex flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm transition hover:shadow-md">
               <div className="h-64 w-full bg-slate-100 relative overflow-hidden">
                 <img
-                  src="https://upload.wikimedia.org/wikipedia/commons/thumb/c/c4/Prime_Minister_Narendra_Modi_in_February_2023.jpg/800px-Prime_Minister_Narendra_Modi_in_February_2023.jpg"
+                  src="/modi.jpg"
                   alt="Shri Narendra Modi, Hon'ble Prime Minister of India"
                   className="h-full w-full object-cover object-top"
                 />
@@ -420,7 +420,7 @@ export default function HomePage() {
             <div className="flex flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm transition hover:shadow-md">
               <div className="h-64 w-full bg-slate-100 relative overflow-hidden">
                 <img
-                  src="https://upload.wikimedia.org/wikipedia/commons/thumb/1/1a/Nitin_Gadkari_cabinet_minister.jpg/800px-Nitin_Gadkari_cabinet_minister.jpg"
+                  src="/gadkari.jpg"
                   alt="Shri Nitin Gadkari, Hon'ble Minister for Road Transport & Highways"
                   className="h-full w-full object-cover object-top"
                 />
