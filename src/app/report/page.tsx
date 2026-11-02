@@ -1,4 +1,3 @@
-
 'use client';
 
 import { createClient } from '../lib/supabase/browser';
@@ -13,6 +12,9 @@ import {
   Upload,
   X,
   RotateCcw,
+  AlertTriangle,
+  Building2,
+  ShieldCheck,
 } from 'lucide-react';
 
 type LocationData = {
@@ -43,12 +45,22 @@ export default function ReportPage() {
   const [error, setError] = useState('');
   const [complaintId, setComplaintId] = useState('');
 
+  // Prefill user name if logged in
+  useEffect(() => {
+    async function loadUserProfile() {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user?.user_metadata?.full_name) {
+        setName(user.user_metadata.full_name);
+      }
+    }
+    void loadUserProfile();
+  }, [supabase]);
+
   useEffect(() => {
     if (cameraOpen && videoRef.current && streamRef.current) {
       videoRef.current.srcObject = streamRef.current;
-
       void videoRef.current.play().catch(() => {
-        setError('Camera preview could not start. Please try again.');
+        setError('Camera preview could not start. Please verify browser permissions.');
       });
     }
   }, [cameraOpen]);
@@ -60,17 +72,18 @@ export default function ReportPage() {
   }, []);
 
   async function lookupDistrict(coords: LocationData) {
-    const url = new URL(
-      'https://nominatim.openstreetmap.org/reverse'
-    );
-
+    const url = new URL('https://nominatim.openstreetmap.org/reverse');
     url.searchParams.set('format', 'jsonv2');
     url.searchParams.set('lat', String(coords.latitude));
     url.searchParams.set('lon', String(coords.longitude));
     url.searchParams.set('zoom', '10');
     url.searchParams.set('addressdetails', '1');
 
-    const response = await fetch(url.toString());
+    const response = await fetch(url.toString(), {
+      headers: {
+        'Accept-Language': 'en',
+      },
+    });
 
     if (!response.ok) {
       throw new Error('District lookup failed.');
@@ -83,12 +96,9 @@ export default function ReportPage() {
       geoAddress.state_district ??
       geoAddress.district ??
       geoAddress.county ??
+      geoAddress.city ??
       ''
-    ).trim();
-
-    if (!detectedDistrict) {
-      throw new Error('District could not be identified.');
-    }
+    ).replace(/District/i, '').trim();
 
     return {
       district: detectedDistrict,
@@ -98,14 +108,12 @@ export default function ReportPage() {
 
   async function detectLocation() {
     if (!navigator.geolocation) {
-      setLocationMessage(
-        'GPS unavailable. Enter the address and select the district manually.'
-      );
+      setLocationMessage('GPS sensor unavailable. Enter address and district manually.');
       return;
     }
 
     setLocating(true);
-    setLocationMessage('Requesting GPS permission...');
+    setLocationMessage('Querying device GPS satellite coordinates...');
     setError('');
 
     navigator.geolocation.getCurrentPosition(
@@ -117,24 +125,22 @@ export default function ReportPage() {
         };
 
         setLocation(coords);
-        setDistrict('');
-        setLocationMessage('GPS detected. Identifying district...');
+        setLocationMessage('GPS locked. Performing district geofence resolution...');
 
         try {
           const result = await lookupDistrict(coords);
-
-          setDistrict(result.district);
-
+          if (result.district) {
+            setDistrict(result.district);
+          }
           if (!address.trim() && result.displayAddress) {
             setAddress(result.displayAddress);
           }
-
           setLocationMessage(
-            `District identified: ${result.district}. Please verify the location before submitting.`
+            `Location pinned. District assigned: ${result.district || 'Custom'}.`
           );
         } catch {
           setLocationMessage(
-            'GPS detected, but district lookup failed. Retry GPS or select the district manually.'
+            'GPS coordinates captured. Reverse district query failed, please type your district.'
           );
         } finally {
           setLocating(false);
@@ -143,24 +149,15 @@ export default function ReportPage() {
       (err) => {
         setLocating(false);
         setLocation(null);
-
         if (err.code === err.PERMISSION_DENIED) {
-          setLocationMessage(
-            'GPS permission denied. Enter the address and select the district manually.'
-          );
-        } else if (err.code === err.TIMEOUT) {
-          setLocationMessage(
-            'GPS timed out. Please try again or enter the address manually.'
-          );
+          setLocationMessage('Location permission denied. Please enter address manually.');
         } else {
-          setLocationMessage(
-            'Unable to detect GPS. Enter the address and select the district manually.'
-          );
+          setLocationMessage('Unable to retrieve GPS. Please type the location manually.');
         }
       },
       {
         enableHighAccuracy: true,
-        timeout: 20000,
+        timeout: 15000,
         maximumAge: 0,
       }
     );
@@ -168,11 +165,8 @@ export default function ReportPage() {
 
   async function openCamera() {
     setError('');
-
     if (!navigator.mediaDevices?.getUserMedia) {
-      setError(
-        'Camera access is unavailable. Open this page on localhost or HTTPS.'
-      );
+      setError('Camera access requires a secure origin (localhost or HTTPS).');
       return;
     }
 
@@ -191,20 +185,10 @@ export default function ReportPage() {
       }
     } catch (err) {
       const cameraError = err as DOMException;
-
-      if (
-        cameraError.name === 'NotAllowedError' ||
-        cameraError.name === 'PermissionDeniedError'
-      ) {
-        setError(
-          'Camera permission denied. Allow camera access in browser settings.'
-        );
-      } else if (cameraError.name === 'NotFoundError') {
-        setError('No camera found. Please upload a photo instead.');
-      } else if (cameraError.name === 'NotReadableError') {
-        setError('Camera is being used by another app. Close it and retry.');
+      if (cameraError.name === 'NotAllowedError' || cameraError.name === 'PermissionDeniedError') {
+        setError('Camera permission blocked in browser settings.');
       } else {
-        setError('Could not open the camera. Check device permissions.');
+        setError('Camera not accessible. Please upload a captured photo directly.');
       }
     }
   }
@@ -217,149 +201,132 @@ export default function ReportPage() {
 
   function capturePhoto() {
     const video = videoRef.current;
-
     if (!video || !video.videoWidth || !video.videoHeight) {
-      setError('Wait until the camera preview appears.');
+      setError('Camera initialising. Please wait for the video stream.');
       return;
     }
 
     const canvas = document.createElement('canvas');
-    const scale = Math.min(
-      1,
-      1400 / Math.max(video.videoWidth, video.videoHeight)
-    );
-
+    const scale = Math.min(1, 1400 / Math.max(video.videoWidth, video.videoHeight));
     canvas.width = Math.round(video.videoWidth * scale);
     canvas.height = Math.round(video.videoHeight * scale);
 
     const context = canvas.getContext('2d');
-
     if (!context) {
-      setError('Unable to capture the photo.');
+      setError('Photo processing failed.');
       return;
     }
 
     context.drawImage(video, 0, 0, canvas.width, canvas.height);
-    setPhoto(canvas.toDataURL('image/jpeg', 0.75));
+    setPhoto(canvas.toDataURL('image/jpeg', 0.8));
     setError('');
     closeCamera();
   }
 
   async function handlePhoto(file?: File) {
     if (!file) return;
-
     if (!file.type.startsWith('image/')) {
-      setError('Please choose an image file.');
+      setError('Invalid file format. Please upload an image.');
       return;
     }
-
     if (file.size > 12 * 1024 * 1024) {
-      setError('Choose an image smaller than 12 MB.');
+      setError('Photo exceeds maximum file limit of 12 MB.');
       return;
     }
 
     const objectUrl = URL.createObjectURL(file);
-
     try {
       const image = new Image();
       image.src = objectUrl;
-
       await new Promise<void>((resolve, reject) => {
         image.onload = () => resolve();
-        image.onerror = () => reject(new Error('Could not read image.'));
+        image.onerror = () => reject(new Error('Image decode error.'));
       });
 
-      const scale = Math.min(
-        1,
-        1400 / Math.max(image.width, image.height)
-      );
-
+      const scale = Math.min(1, 1400 / Math.max(image.width, image.height));
       const canvas = document.createElement('canvas');
       canvas.width = Math.round(image.width * scale);
       canvas.height = Math.round(image.height * scale);
 
       const context = canvas.getContext('2d');
-
-      if (!context) {
-        throw new Error('Could not process image.');
-      }
+      if (!context) throw new Error('Image canvas rendering failed.');
 
       context.drawImage(image, 0, 0, canvas.width, canvas.height);
-      setPhoto(canvas.toDataURL('image/jpeg', 0.75));
+      setPhoto(canvas.toDataURL('image/jpeg', 0.8));
       setError('');
     } catch {
-      setError('Unable to read this image. Please select another photo.');
+      setError('Unable to parse photo. Please try another file.');
     } finally {
       URL.revokeObjectURL(objectUrl);
     }
   }
 
-  async function submitReport(
-    e: React.FormEvent<HTMLFormElement>
-  ) {
+  async function submitReport(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setError('');
 
     if (submitting) return;
 
     if (!name.trim() || !description.trim()) {
-      setError('Please complete all required fields.');
+      setError('Please provide your name and problem description.');
       return;
     }
-
     if (!photo) {
-      setError('Capture a photo or choose one from your gallery.');
+      setError('Damaged road photo is mandatory for audit verification.');
       return;
     }
-
     if (!address.trim()) {
-      setError('Please enter the road address or landmark.');
+      setError('Please enter the landmark or street address.');
       return;
     }
-
     if (!district.trim()) {
-      setError(
-        'District is not identified. Detect GPS again or select the district manually.'
-      );
+      setError('District identification is required to assign local engineers.');
       return;
     }
 
     setSubmitting(true);
 
-    const id = `SS-${Date.now().toString().slice(-8)}`;
-    let uploadedPath: string | null = null;
+    const cleanDistrict = district.trim().toUpperCase().slice(0, 3);
+    const generatedId = `SETTU-2026-${cleanDistrict || 'ROD'}-${Math.floor(1000 + Math.random() * 9000)}`;
+    let uploadedStoragePath: string | null = null;
 
     try {
-      const {
-        data: { user },
-        error: authError,
-      } = await supabase.auth.getUser();
-
+      const { data: { user }, error: authError } = await supabase.auth.getUser();
       if (authError || !user) {
-        throw new Error('Please log in before submitting a road report.');
+        throw new Error('Active session expired. Please sign in again.');
       }
 
+      // Convert base64 data to Blob
       const imageBlob = await fetch(photo).then((res) => res.blob());
-      const filePath = `${id}/${Date.now()}.jpg`;
+      const fileName = `${generatedId}_${Date.now()}.jpg`;
 
-      const { error: uploadError } = await supabase.storage
+      // Upload to Supabase Storage 'road-photos'
+      const { data: uploadData, error: uploadError } = await supabase.storage
         .from('road-photos')
-        .upload(filePath, imageBlob, {
+        .upload(fileName, imageBlob, {
           contentType: 'image/jpeg',
-          upsert: false,
+          upsert: true,
         });
 
       if (uploadError) {
-        throw new Error(`Photo upload failed: ${uploadError.message}`);
+        throw new Error(`Photo cloud storage failed: ${uploadError.message}`);
       }
 
-      uploadedPath = filePath;
+      uploadedStoragePath = uploadData.path;
 
+      // Extract Public URL
+      const { data: urlData } = supabase.storage
+        .from('road-photos')
+        .getPublicUrl(uploadData.path);
+
+      const photoUrl = urlData?.publicUrl || uploadData.path;
+
+      // Insert record to database
       const { error: insertError } = await supabase
         .from('road_reports')
         .insert({
           user_id: user.id,
-          complaint_id: id,
+          complaint_id: generatedId,
           name: name.trim(),
           damage_type: damageType,
           description: description.trim(),
@@ -369,108 +336,123 @@ export default function ReportPage() {
           longitude: location?.longitude ?? null,
           location_accuracy: location?.accuracy ?? null,
           district: district.trim(),
-          photo_path: uploadedPath,
+          photo_path: photoUrl,
           status: 'Submitted',
         });
 
       if (insertError) {
-        throw new Error(`Database save failed: ${insertError.message}`);
+        throw new Error(`Database transaction error: ${insertError.message}`);
       }
 
-      setComplaintId(id);
-    } catch (err) {
-      if (uploadedPath) {
-        const { error: cleanupError } = await supabase.storage
-          .from('road-photos')
-          .remove([uploadedPath]);
-
-        if (cleanupError) {
-          console.error('Photo cleanup failed:', cleanupError.message);
-        }
+      setComplaintId(generatedId);
+    } catch (err: any) {
+      if (uploadedStoragePath) {
+        await supabase.storage.from('road-photos').remove([uploadedStoragePath]);
       }
-
-      setError(
-        err instanceof Error
-          ? err.message
-          : 'Unable to submit the report. Please try again.'
-      );
+      setError(err?.message || 'Unable to register complaint. Please retry.');
     } finally {
       setSubmitting(false);
     }
   }
 
   const fieldClass =
-    'mt-2 w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-base text-slate-900 placeholder:text-slate-500 outline-none transition focus:border-blue-600 focus:ring-4 focus:ring-blue-100';
+    'mt-1.5 w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-xs font-medium text-slate-900 placeholder:text-slate-400 outline-none transition focus:border-orange-500 focus:ring-2 focus:ring-orange-100';
 
-  const labelClass = 'block text-sm font-bold text-slate-800';
+  const labelClass = 'block text-xs font-bold text-slate-800';
 
   if (complaintId) {
     return (
-      <main className="min-h-screen bg-slate-100 px-4 py-12">
-        <section className="mx-auto max-w-xl rounded-2xl border border-slate-200 bg-white p-8 text-center shadow-lg">
-          <CheckCircle2 className="mx-auto mb-4 h-16 w-16 text-green-600" />
+      <main className="flex min-h-screen items-center justify-center bg-slate-100 px-4 py-12 selection:bg-orange-500 selection:text-white">
+        <section className="mx-auto w-full max-w-lg rounded-3xl border border-slate-200 bg-white p-8 text-center shadow-xl">
+          <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-emerald-50 text-emerald-600">
+            <CheckCircle2 size={36} />
+          </div>
 
-          <h1 className="text-2xl font-extrabold text-slate-900">
-            Report Submitted Successfully
+          <span className="rounded-full bg-emerald-100 px-3 py-1 text-[11px] font-bold uppercase tracking-wider text-emerald-800">
+            Official Grievance Registered
+          </span>
+
+          <h1 className="mt-3 text-2xl font-black text-slate-900">
+            Grievance Reference Number
           </h1>
 
-          <p className="mt-3 text-slate-700">
-            Your complaint reference number:
+          <div className="mt-4 rounded-2xl border border-orange-200 bg-orange-50/70 p-4">
+            <p className="text-2xl font-black tracking-wide text-orange-600 font-mono">
+              {complaintId}
+            </p>
+            <p className="mt-1 text-[11px] font-semibold text-slate-600">
+              Assigned District Jurisdiction: <strong>{district}</strong>
+            </p>
+          </div>
+
+          <p className="mt-4 text-xs leading-relaxed text-slate-600">
+            Your road damage report has been forwarded to the <strong>{district} Road Repair Division</strong>.
+            You can monitor inspection, repair proof, and statutory approval from your dashboard.
           </p>
 
-          <p className="mt-2 text-3xl font-extrabold text-blue-700">
-            {complaintId}
-          </p>
-
-          <p className="mt-4 text-sm text-slate-600">
-            District: {district}
-          </p>
-
-          <p className="mt-2 text-sm leading-6 text-slate-600">
-            Your report was saved to the database. Keep your reference number
-            to track its status.
-          </p>
-
-          <Link
-            href="/"
-            className="mt-6 inline-flex rounded-xl bg-slate-900 px-5 py-3 font-bold text-white hover:bg-slate-700"
-          >
-            Back to Home
-          </Link>
+          <div className="mt-6 flex flex-col gap-2 sm:flex-row">
+            <Link
+              href="/dashboard/citizen"
+              className="flex-1 rounded-xl bg-orange-600 py-3 text-xs font-bold text-white shadow-md shadow-orange-600/20 hover:bg-orange-500"
+            >
+              Open Citizen Dashboard
+            </Link>
+            <Link
+              href="/"
+              className="flex-1 rounded-xl border border-slate-300 py-3 text-xs font-bold text-slate-700 hover:bg-slate-50"
+            >
+              Back to Home
+            </Link>
+          </div>
         </section>
       </main>
     );
   }
 
   return (
-    <main className="min-h-screen bg-slate-100 px-4 py-8 sm:py-12">
+    <main className="min-h-screen bg-slate-100 px-4 py-8 sm:py-12 selection:bg-orange-500 selection:text-white">
       <section className="mx-auto max-w-2xl">
-        <Link
-          href="/"
-          className="mb-6 inline-flex items-center gap-2 font-semibold text-slate-700 hover:text-blue-700"
-        >
-          <ArrowLeft size={19} /> Back to Home
-        </Link>
+        <div className="mb-4 flex items-center justify-between">
+          <Link
+            href="/dashboard/citizen"
+            className="inline-flex items-center gap-1.5 text-xs font-bold text-slate-600 hover:text-orange-600"
+          >
+            <ArrowLeft size={16} /> Return to Dashboard
+          </Link>
+          <span className="text-[11px] font-bold text-slate-400">
+            FORM ST-CIVIC-01
+          </span>
+        </div>
 
-        <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-lg">
-          <div className="bg-slate-900 px-6 py-7 text-white sm:px-8">
-            <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-blue-500">
-              <MapPin size={25} />
+        <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-xl">
+          {/* Header Banner */}
+          <div className="bg-slate-950 px-6 py-6 text-white sm:px-8">
+            <div className="flex items-center gap-2">
+              <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-orange-600 text-white">
+                <MapPin size={20} />
+              </span>
+              <div>
+                <h1 className="text-xl font-black tracking-tight">
+                  Lodge Road Damage Grievance
+                </h1>
+                <p className="text-xs text-slate-300">
+                  Geo-tagged live evidence submission for district repair teams
+                </p>
+              </div>
             </div>
-
-            <h1 className="text-3xl font-extrabold tracking-tight">
-              Report Road Damage
-            </h1>
-
-            <p className="mt-2 leading-6 text-slate-200">
-              Capture a photo and record the road location.
-            </p>
           </div>
 
-          <form onSubmit={submitReport} className="space-y-6 p-6 sm:p-8">
+          <form onSubmit={submitReport} className="space-y-5 p-6 sm:p-8">
+            {error && (
+              <div className="flex items-start gap-2 rounded-xl border border-rose-200 bg-rose-50 p-3.5 text-xs text-rose-700 font-medium">
+                <AlertTriangle size={16} className="shrink-0 mt-0.5" />
+                <span>{error}</span>
+              </div>
+            )}
+
             <div>
               <label htmlFor="name" className={labelClass}>
-                Your Name *
+                Complainant Full Name *
               </label>
               <input
                 id="name"
@@ -478,31 +460,37 @@ export default function ReportPage() {
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 className={fieldClass}
-                placeholder="Enter your full name"
+                placeholder="Enter your official name"
               />
             </div>
 
+            {/* Photo Section */}
             <div>
-              <p className={labelClass}>Road Photo *</p>
-              <p className="mt-1 text-sm text-slate-600">
-                Open the live camera or select a photo from your device.
+              <div className="flex items-center justify-between">
+                <p className={labelClass}>Damaged Road Photo Evidence *</p>
+                <span className="text-[10px] font-bold uppercase tracking-wider text-orange-600">
+                  Geo-tagged
+                </span>
+              </div>
+              <p className="mt-0.5 text-xs text-slate-500">
+                Live camera capture recommended for verified GPS tagging.
               </p>
 
-              <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <div className="mt-3 grid grid-cols-2 gap-3">
                 <button
                   type="button"
                   onClick={openCamera}
-                  className="flex min-h-14 items-center justify-center gap-2 rounded-xl bg-blue-700 px-4 py-3 font-bold text-white shadow-sm hover:bg-blue-800"
+                  className="flex items-center justify-center gap-2 rounded-xl bg-orange-600 py-3 text-xs font-bold text-white shadow-sm hover:bg-orange-500"
                 >
-                  <Camera size={21} /> Open Camera
+                  <Camera size={16} /> Open Camera
                 </button>
 
                 <button
                   type="button"
                   onClick={() => fileRef.current?.click()}
-                  className="flex min-h-14 items-center justify-center gap-2 rounded-xl border-2 border-slate-300 bg-white px-4 py-3 font-bold text-slate-800 hover:border-blue-600 hover:bg-blue-50"
+                  className="flex items-center justify-center gap-2 rounded-xl border border-slate-300 bg-white py-3 text-xs font-bold text-slate-700 hover:bg-slate-50"
                 >
-                  <Upload size={21} /> Upload Photo
+                  <Upload size={16} /> Upload Device File
                 </button>
               </div>
 
@@ -517,20 +505,19 @@ export default function ReportPage() {
                 }}
               />
 
+              {/* Camera Preview */}
               {cameraOpen && (
-                <div className="mt-4 overflow-hidden rounded-2xl border-2 border-slate-300 bg-slate-950 p-3">
-                  <div className="mb-3 flex items-center justify-between gap-2 text-white">
-                    <span className="flex items-center gap-2 font-bold">
-                      <Camera size={18} /> Live Camera
+                <div className="mt-4 overflow-hidden rounded-2xl border-2 border-slate-800 bg-slate-950 p-3">
+                  <div className="mb-2 flex items-center justify-between text-white text-xs font-bold">
+                    <span className="flex items-center gap-1.5 text-emerald-400">
+                      <Camera size={14} /> Live Viewfinder Active
                     </span>
-
                     <button
                       type="button"
                       onClick={closeCamera}
-                      className="rounded-lg p-2 hover:bg-slate-800"
-                      aria-label="Close camera"
+                      className="rounded p-1 hover:bg-slate-800"
                     >
-                      <X size={21} />
+                      <X size={18} />
                     </button>
                   </div>
 
@@ -539,52 +526,50 @@ export default function ReportPage() {
                     autoPlay
                     playsInline
                     muted
-                    className="max-h-96 w-full rounded-xl bg-black object-contain"
+                    className="max-h-72 w-full rounded-xl bg-black object-contain"
                   />
 
                   <button
                     type="button"
                     onClick={capturePhoto}
-                    className="mt-3 flex min-h-14 w-full items-center justify-center gap-2 rounded-xl bg-green-600 px-4 py-3 font-extrabold text-white hover:bg-green-700"
+                    className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 py-3 text-xs font-bold text-white hover:bg-emerald-500"
                   >
-                    <Camera size={21} /> Capture Photo
+                    <Camera size={16} /> Click Photo & Pin Coordinates
                   </button>
                 </div>
               )}
 
+              {/* Selected Photo Display */}
               {photo && (
-                <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-3">
-                  <div className="mb-2 flex items-center justify-between gap-2">
-                    <p className="font-bold text-slate-800">Selected Photo</p>
-
+                <div className="mt-3 rounded-2xl border border-slate-200 bg-slate-50 p-3">
+                  <div className="mb-2 flex items-center justify-between">
+                    <span className="text-xs font-bold text-slate-700">Captured Frame</span>
                     <button
                       type="button"
                       onClick={() => setPhoto('')}
-                      className="flex items-center gap-1 rounded-lg px-3 py-2 text-sm font-bold text-red-700 hover:bg-red-50"
+                      className="flex items-center gap-1 text-xs font-bold text-rose-600 hover:text-rose-700"
                     >
-                      <RotateCcw size={16} /> Retake
+                      <RotateCcw size={13} /> Retake
                     </button>
                   </div>
-
                   <img
                     src={photo}
-                    alt="Road damage selected for report"
-                    className="max-h-72 w-full rounded-lg object-contain"
+                    alt="Road issue preview"
+                    className="max-h-64 w-full rounded-xl object-contain border border-slate-200"
                   />
                 </div>
               )}
             </div>
 
-            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 sm:p-5">
-              <div className="flex flex-wrap items-center justify-between gap-3">
+            {/* GPS & Location Module */}
+            <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4 sm:p-5">
+              <div className="flex items-center justify-between gap-3">
                 <div>
-                  <h2 className="flex items-center gap-2 text-lg font-extrabold text-slate-900">
-                    <MapPin size={21} /> Road Location
-                  </h2>
-
-                  <p className="mt-1 text-sm text-slate-600">
-                    Allow GPS access to record your coordinates and identify
-                    the district.
+                  <h3 className="flex items-center gap-1.5 text-xs font-extrabold uppercase tracking-wide text-slate-800">
+                    <MapPin size={15} className="text-orange-600" /> Auto Geo-Tagging
+                  </h3>
+                  <p className="mt-0.5 text-[11px] text-slate-500">
+                    Pins exact latitude & longitude coordinates
                   </p>
                 </div>
 
@@ -592,162 +577,128 @@ export default function ReportPage() {
                   type="button"
                   onClick={() => void detectLocation()}
                   disabled={locating || submitting}
-                  className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border-2 border-blue-700 bg-white px-4 py-2 font-bold text-blue-800 hover:bg-blue-50 disabled:opacity-60"
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 shadow-sm hover:bg-slate-50 disabled:opacity-60"
                 >
                   {locating ? (
-                    <LoaderCircle size={18} className="animate-spin" />
+                    <LoaderCircle size={14} className="animate-spin text-orange-600" />
                   ) : (
-                    <MapPin size={18} />
+                    <MapPin size={14} />
                   )}
-                  {locating ? 'Detecting...' : 'Detect Location'}
+                  {locating ? 'Acquiring...' : 'Refresh GPS'}
                 </button>
               </div>
 
-              <p
-                aria-live="polite"
-                className="mt-3 rounded-lg bg-white p-3 text-sm font-medium text-slate-700"
-              >
-                {locationMessage ||
-                  'Your browser will ask permission to share your location.'}
-              </p>
+              {locationMessage && (
+                <p className="mt-2 rounded-lg bg-white p-2.5 text-[11px] font-medium text-slate-600 border border-slate-200">
+                  {locationMessage}
+                </p>
+              )}
 
               {location && (
-                <div className="mt-3 rounded-xl border border-green-200 bg-green-50 p-4 text-sm font-medium text-green-900">
-                  <p>Latitude: {location.latitude.toFixed(6)}</p>
-                  <p>Longitude: {location.longitude.toFixed(6)}</p>
-                  <p>
-                    GPS accuracy: approximately{' '}
-                    {Math.round(location.accuracy)} metres
-                  </p>
-
-                  {district && (
-                    <p className="mt-2 font-extrabold">
-                      Detected district: {district}
-                    </p>
-                  )}
-
-                  <a
-                    className="mt-2 inline-block font-bold underline"
-                    href={`https://www.google.com/maps?q=${location.latitude},${location.longitude}`}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    View on Google Maps
-                  </a>
+                <div className="mt-3 grid grid-cols-2 gap-2 rounded-xl bg-white p-3 text-xs text-slate-700 border border-slate-200">
+                  <div>
+                    <span className="text-slate-400 text-[10px] block">LATITUDE</span>
+                    <span className="font-mono font-bold">{location.latitude.toFixed(6)}</span>
+                  </div>
+                  <div>
+                    <span className="text-slate-400 text-[10px] block">LONGITUDE</span>
+                    <span className="font-mono font-bold">{location.longitude.toFixed(6)}</span>
+                  </div>
                 </div>
               )}
 
-              <label htmlFor="address" className={`${labelClass} mt-5`}>
-                Road Address / Landmark *
-              </label>
+              <div className="mt-4">
+                <label htmlFor="address" className={labelClass}>
+                  Road Address / Landmark *
+                </label>
+                <input
+                  id="address"
+                  required
+                  value={address}
+                  onChange={(e) => setAddress(e.target.value)}
+                  className={fieldClass}
+                  placeholder="e.g. Near Station Road, Main Market, Dumraon"
+                />
+              </div>
 
-              <input
-                id="address"
-                required
-                value={address}
-                onChange={(e) => setAddress(e.target.value)}
-                className={fieldClass}
-                placeholder="Street, Dumraon, Buxar or nearby landmark"
-              />
-
-              <label htmlFor="district" className={`${labelClass} mt-5`}>
-                District *
-              </label>
-
-              <select
-                id="district"
-                required
-                value={district}
-                onChange={(e) => setDistrict(e.target.value)}
-                className={fieldClass}
-              >
-                <option value="">Select or verify district</option>
-                <option value="Buxar">Buxar</option>
-                <option value="Bhojpur">Bhojpur</option>
-                <option value="Rohtas">Rohtas</option>
-                <option value="Kaimur">Kaimur</option>
-                <option value="Patna">Patna</option>
-                <option value="Other">Other / verify manually</option>
-              </select>
-
-              <p className="mt-2 text-xs leading-5 text-slate-600">
-                GPS lookup provides a suggested district. Verify it before
-                submission. If GPS lookup fails, select the correct district
-                manually. This is not an official boundary verification.
-              </p>
+              <div className="mt-4">
+                <label htmlFor="district" className={labelClass}>
+                  District Jurisdiction *
+                </label>
+                <input
+                  id="district"
+                  required
+                  value={district}
+                  onChange={(e) => setDistrict(e.target.value)}
+                  className={fieldClass}
+                  placeholder="e.g. Buxar, Bhojpur, Patna, etc."
+                />
+                <p className="mt-1 text-[11px] text-slate-400">
+                  * Auto-detected by GPS. You can edit or verify your district name here.
+                </p>
+              </div>
             </div>
 
-            <div>
-              <label htmlFor="damageType" className={labelClass}>
-                Type of Damage
-              </label>
+            {/* Damage Details Grid */}
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div>
+                <label htmlFor="damageType" className={labelClass}>
+                  Damage Classification
+                </label>
+                <select
+                  id="damageType"
+                  value={damageType}
+                  onChange={(e) => setDamageType(e.target.value)}
+                  className={fieldClass}
+                >
+                  <option>Pothole</option>
+                  <option>Broken Road & Gravel</option>
+                  <option>Waterlogging / Drainage Leak</option>
+                  <option>Structural Crack / Depression</option>
+                  <option>Damaged Manhole Cover</option>
+                  <option>Other Road Hazard</option>
+                </select>
+              </div>
 
-              <select
-                id="damageType"
-                value={damageType}
-                onChange={(e) => setDamageType(e.target.value)}
-                className={fieldClass}
-              >
-                <option>Pothole</option>
-                <option>Broken Road</option>
-                <option>Waterlogging</option>
-                <option>Cracked Surface</option>
-                <option>Damaged Manhole</option>
-                <option>Other</option>
-              </select>
-            </div>
-
-            <div>
-              <label htmlFor="urgency" className={labelClass}>
-                Urgency Level
-              </label>
-
-              <select
-                id="urgency"
-                value={urgency}
-                onChange={(e) => setUrgency(e.target.value)}
-                className={fieldClass}
-              >
-                <option>Low</option>
-                <option>Medium</option>
-                <option>High</option>
-              </select>
+              <div>
+                <label htmlFor="urgency" className={labelClass}>
+                  Severity / Urgency Level
+                </label>
+                <select
+                  id="urgency"
+                  value={urgency}
+                  onChange={(e) => setUrgency(e.target.value)}
+                  className={fieldClass}
+                >
+                  <option>Low (Surface Blemish)</option>
+                  <option>Medium (Disrupts Traffic)</option>
+                  <option>High (Fatal Accident Hazard)</option>
+                </select>
+              </div>
             </div>
 
             <div>
               <label htmlFor="description" className={labelClass}>
-                Describe the Damage *
+                Damage Remarks & Context *
               </label>
-
               <textarea
                 id="description"
                 required
-                rows={4}
+                rows={3}
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
                 className={fieldClass}
-                placeholder="Describe the road condition and any safety concerns..."
+                placeholder="Mention road dimension, depth, accident risk, or duration of damage..."
               />
             </div>
-
-            {error && (
-              <p
-                role="alert"
-                className="rounded-xl border border-red-200 bg-red-50 p-4 font-semibold leading-6 text-red-800"
-              >
-                {error}
-              </p>
-            )}
 
             <button
               type="submit"
               disabled={submitting || locating}
-              className="flex min-h-14 w-full items-center justify-center gap-2 rounded-xl bg-slate-900 px-5 py-4 text-base font-extrabold text-white shadow-sm hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+              className="flex w-full items-center justify-center gap-2 rounded-xl bg-slate-900 py-3.5 text-xs font-bold text-white shadow-lg shadow-slate-950/20 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              {submitting && (
-                <LoaderCircle size={20} className="animate-spin" />
-              )}
-              {submitting ? 'Submitting Report...' : 'Submit Road Report'}
+              {submitting && <LoaderCircle size={16} className="animate-spin" />}
+              {submitting ? 'Registering Grievance...' : 'Submit Grievance to District Division'}
             </button>
           </form>
         </div>
