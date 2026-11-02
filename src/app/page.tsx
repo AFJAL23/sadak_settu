@@ -249,7 +249,7 @@ export default function HomePage() {
           className="absolute inset-0 -z-20 bg-cover bg-center opacity-30"
           style={{
             backgroundImage:
-            "url('/sadak-settu-hero.jpg')", 
+            "url('/sadak-settu-hero.jpeg')",
           }}
         />
         <div className="absolute inset-0 -z-10 bg-gradient-to-r from-slate-950 via-slate-950/95 to-slate-900/80" />
@@ -391,7 +391,7 @@ export default function HomePage() {
             <div className="flex flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm transition hover:shadow-md">
               <div className="h-64 w-full bg-slate-100 relative overflow-hidden">
                 <img
-                  src="/modi.jpg"
+                  src="/modi.jpeg"
                   alt="Shri Narendra Modi, Hon'ble Prime Minister of India"
                   className="h-full w-full object-cover object-top"
                 />
@@ -420,7 +420,7 @@ export default function HomePage() {
             <div className="flex flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm transition hover:shadow-md">
               <div className="h-64 w-full bg-slate-100 relative overflow-hidden">
                 <img
-                  src="/gadkari.jpg"
+                  src="/gadkari.jpeg"
                   alt="Shri Nitin Gadkari, Hon'ble Minister for Road Transport & Highways"
                   className="h-full w-full object-cover object-top"
                 />
